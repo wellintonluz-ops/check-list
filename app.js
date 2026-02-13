@@ -37,6 +37,7 @@ const FIRESTORE_STATE_DOC = 'shared';
 let firestoreDb = null;
 let isFirestoreReady = false;
 let anonAuthPromise = null;
+let unsubscribeState = null;
 
 const uid = () => (window.crypto && crypto.randomUUID ? crypto.randomUUID() : `id-${Date.now()}-${Math.random().toString(16).slice(2)}`);
 
@@ -217,6 +218,34 @@ const fetchStateFromFirestore = async () => {
     render();
   } catch (err) {
     console.warn('Falha ao carregar estado do Firestore', err);
+  }
+};
+
+const subscribeStateFromFirestore = async () => {
+  try {
+    const db = await initFirestore();
+    if (!db) return;
+    if (unsubscribeState) return; // já inscrito
+    unsubscribeState = db
+      .collection(FIRESTORE_STATE_COLLECTION)
+      .doc(FIRESTORE_STATE_DOC)
+      .onSnapshot((doc) => {
+        if (!doc.exists) return;
+        // Ignora alterações locais ainda não confirmadas
+        if (doc.metadata && doc.metadata.hasPendingWrites) return;
+        const data = doc.data() || {};
+        const remoteSubjects = normalizeState(data.subjects || []);
+        if (!remoteSubjects.length) return;
+        // Evita re-render se não houve mudança relevante
+        const current = JSON.stringify(state);
+        const incoming = JSON.stringify(remoteSubjects);
+        if (current === incoming) return;
+        state = remoteSubjects;
+        localStorage.setItem(storageKey, JSON.stringify(state));
+        render();
+      });
+  } catch (err) {
+    console.warn('Falha ao escutar estado do Firestore', err);
   }
 };
 
@@ -919,3 +948,4 @@ setTab(activeTab);
 updateAuthUI();
 fetchHistoryFromFirestore();
 fetchStateFromFirestore();
+subscribeStateFromFirestore();
