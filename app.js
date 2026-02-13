@@ -523,7 +523,21 @@ const render = () => {
     const progressSpan = document.createElement('span');
     progressSpan.style.width = `${percent}%`;
     progress.appendChild(progressSpan);
-    header.append(h2, progress);
+    if (isLoggedIn) {
+      const actions = document.createElement('div');
+      actions.className = 'subject-actions';
+
+      const deleteSubjectBtn = document.createElement('button');
+      deleteSubjectBtn.type = 'button';
+      deleteSubjectBtn.className = 'btn btn-secondary';
+      deleteSubjectBtn.dataset.removeSubject = subject.id;
+      deleteSubjectBtn.textContent = 'Excluir assunto';
+
+      actions.appendChild(deleteSubjectBtn);
+      header.append(h2, progress, actions);
+    } else {
+      header.append(h2, progress);
+    }
 
     const list = document.createElement('ul');
     list.className = 'topics';
@@ -615,6 +629,20 @@ $subjects.addEventListener('click', (event) => {
   if (!section) return;
   const subject = state.find((s) => s.id === section.dataset.id);
   if (!subject) return;
+
+  const removeSubjectId = event.target.dataset.removeSubject;
+  if (removeSubjectId) {
+    if (!isLoggedIn) {
+      alert('Faça login para excluir um assunto.');
+      return;
+    }
+    const confirmDelete = window.confirm('Excluir este assunto e todos os tópicos?');
+    if (!confirmDelete) return;
+    state = state.filter((s) => s.id !== removeSubjectId);
+    save();
+    render();
+    return;
+  }
 
   const attachId = event.target.dataset.attach;
   if (attachId) {
