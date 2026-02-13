@@ -32,6 +32,8 @@ const firebaseConfig = {
 };
 
 const FIRESTORE_COLLECTION = 'checklistSnapshots';
+const FIRESTORE_STATE_COLLECTION = 'checklistState';
+const FIRESTORE_STATE_DOC = 'shared';
 let firestoreDb = null;
 let isFirestoreReady = false;
 let anonAuthPromise = null;
@@ -87,7 +89,10 @@ const load = () => {
   }
 };
 
-const save = () => localStorage.setItem(storageKey, JSON.stringify(state));
+const save = () => {
+  localStorage.setItem(storageKey, JSON.stringify(state));
+  persistStateToFirestore().catch((err) => console.warn('Falha ao salvar estado no Firestore', err));
+};
 const saveHistory = () => localStorage.setItem(historyKey, JSON.stringify(history));
 const saveAuth = () => localStorage.setItem(authKey, isLoggedIn ? '1' : '0');
 
@@ -181,6 +186,37 @@ const persistSnapshotToFirestore = async (snapshot) => {
     await db.collection(FIRESTORE_COLLECTION).doc(snapshot.id).set(payload);
   } catch (err) {
     console.warn('Falha ao salvar no Firestore', err);
+  }
+};
+
+const persistStateToFirestore = async () => {
+  try {
+    const db = await initFirestore();
+    if (!db) return;
+    const payload = {
+      subjects: JSON.parse(JSON.stringify(state)),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    };
+    await db.collection(FIRESTORE_STATE_COLLECTION).doc(FIRESTORE_STATE_DOC).set(payload, { merge: true });
+  } catch (err) {
+    console.warn('Falha ao salvar estado no Firestore', err);
+  }
+};
+
+const fetchStateFromFirestore = async () => {
+  try {
+    const db = await initFirestore();
+    if (!db) return;
+    const doc = await db.collection(FIRESTORE_STATE_COLLECTION).doc(FIRESTORE_STATE_DOC).get();
+    if (!doc.exists) return;
+    const data = doc.data() || {};
+    const remoteSubjects = normalizeState(data.subjects || []);
+    if (!remoteSubjects.length) return;
+    state = remoteSubjects;
+    save();
+    render();
+  } catch (err) {
+    console.warn('Falha ao carregar estado do Firestore', err);
   }
 };
 
@@ -882,3 +918,4 @@ renderHistory();
 setTab(activeTab);
 updateAuthUI();
 fetchHistoryFromFirestore();
+fetchStateFromFirestore();
