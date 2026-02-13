@@ -34,6 +34,7 @@ const firebaseConfig = {
 const FIRESTORE_COLLECTION = 'checklistSnapshots';
 let firestoreDb = null;
 let isFirestoreReady = false;
+let anonAuthPromise = null;
 
 const uid = () => (window.crypto && crypto.randomUUID ? crypto.randomUUID() : `id-${Date.now()}-${Math.random().toString(16).slice(2)}`);
 
@@ -109,11 +110,28 @@ const loadHistory = () => {
   }
 };
 
+const ensureAnonAuth = async () => {
+  if (typeof firebase === 'undefined' || !firebase.auth) return null;
+  if (firebase.auth().currentUser) return firebase.auth().currentUser;
+  if (!anonAuthPromise) {
+    anonAuthPromise = firebase
+      .auth()
+      .signInAnonymously()
+      .catch((err) => {
+        console.warn('Falha no login anônimo para Firestore', err);
+        anonAuthPromise = null;
+        return null;
+      });
+  }
+  return anonAuthPromise;
+};
+
 const initFirestore = async () => {
   if (typeof firebase === 'undefined') return null;
   if (isFirestoreReady && firestoreDb) return firestoreDb;
   try {
     if (!firebase.apps?.length) firebase.initializeApp(firebaseConfig);
+    await ensureAnonAuth();
     firestoreDb = firebase.firestore();
     isFirestoreReady = true;
     return firestoreDb;
