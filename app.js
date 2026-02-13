@@ -465,6 +465,16 @@ const render = () => {
     attachBtn.type = 'button';
     attachBtn.dataset.attach = topic.id;
     attachBtn.textContent = 'Foto/Imagem';
+
+    if (isLoggedIn) {
+      const editBtn = document.createElement('button');
+      editBtn.className = 'btn btn-secondary btn-ghost';
+      editBtn.type = 'button';
+      editBtn.dataset.editTopic = topic.id;
+      editBtn.textContent = 'Editar';
+      actions.appendChild(editBtn);
+    }
+
     const removeBtn = document.createElement('button');
     removeBtn.className = 'btn btn-secondary';
     removeBtn.type = 'button';
@@ -527,13 +537,25 @@ const render = () => {
       const actions = document.createElement('div');
       actions.className = 'subject-actions';
 
+      const editSubjectBtn = document.createElement('button');
+      editSubjectBtn.type = 'button';
+      editSubjectBtn.className = 'btn btn-secondary btn-ghost';
+      editSubjectBtn.dataset.editSubject = subject.id;
+      editSubjectBtn.textContent = 'Editar assunto';
+
+      const duplicateSubjectBtn = document.createElement('button');
+      duplicateSubjectBtn.type = 'button';
+      duplicateSubjectBtn.className = 'btn btn-secondary btn-ghost';
+      duplicateSubjectBtn.dataset.cloneSubject = subject.id;
+      duplicateSubjectBtn.textContent = 'Duplicar assunto';
+
       const deleteSubjectBtn = document.createElement('button');
       deleteSubjectBtn.type = 'button';
       deleteSubjectBtn.className = 'btn btn-secondary';
       deleteSubjectBtn.dataset.removeSubject = subject.id;
       deleteSubjectBtn.textContent = 'Excluir assunto';
 
-      actions.appendChild(deleteSubjectBtn);
+      actions.append(editSubjectBtn, duplicateSubjectBtn, deleteSubjectBtn);
       header.append(h2, progress, actions);
     } else {
       header.append(h2, progress);
@@ -630,6 +652,45 @@ $subjects.addEventListener('click', (event) => {
   const subject = state.find((s) => s.id === section.dataset.id);
   if (!subject) return;
 
+  const editSubjectId = event.target.dataset.editSubject;
+  if (editSubjectId) {
+    if (!isLoggedIn) {
+      alert('Faça login para editar um assunto.');
+      return;
+    }
+    const nextTitle = window.prompt('Edite o assunto', subject.title || '');
+    if (nextTitle === null) return;
+    const trimmed = (nextTitle || '').trim();
+    if (!trimmed) return;
+    subject.title = trimmed;
+    save();
+    render();
+    return;
+  }
+
+  const cloneSubjectId = event.target.dataset.cloneSubject;
+  if (cloneSubjectId) {
+    if (!isLoggedIn) {
+      alert('Faça login para duplicar um assunto.');
+      return;
+    }
+    const source = state.find((s) => s.id === cloneSubjectId);
+    if (!source) return;
+    const newSubjectId = uid();
+    const copy = {
+      id: newSubjectId,
+      title: `${source.title} (cópia)`,
+      topics: (source.topics || []).map((t) => ({
+        ...t,
+        id: uid(),
+      })),
+    };
+    state.push(copy);
+    save();
+    render();
+    return;
+  }
+
   const removeSubjectId = event.target.dataset.removeSubject;
   if (removeSubjectId) {
     if (!isLoggedIn) {
@@ -639,6 +700,24 @@ $subjects.addEventListener('click', (event) => {
     const confirmDelete = window.confirm('Excluir este assunto e todos os tópicos?');
     if (!confirmDelete) return;
     state = state.filter((s) => s.id !== removeSubjectId);
+    save();
+    render();
+    return;
+  }
+
+  const editTopicId = event.target.dataset.editTopic;
+  if (editTopicId) {
+    if (!isLoggedIn) {
+      alert('Faça login para editar um tópico.');
+      return;
+    }
+    const topic = subject.topics.find((t) => t.id === editTopicId);
+    if (!topic) return;
+    const nextText = window.prompt('Edite o tópico', topic.text || '');
+    if (nextText === null) return;
+    const trimmed = (nextText || '').trim();
+    if (!trimmed) return;
+    topic.text = trimmed;
     save();
     render();
     return;
