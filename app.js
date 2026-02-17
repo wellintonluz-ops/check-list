@@ -63,13 +63,49 @@ const debounce = (fn, delay = 400) => {
 // Placeholder to avoid undefined before debounce is attached
 let persistStateToFirestoreDebounced = () => Promise.resolve();
 
+const ensureStorage = async () => {
+  const db = await initFirestore();
+  if (!db || typeof firebase === 'undefined' || !firebase.storage) return null;
+  return firebase.storage();
+};
+
+const uploadImageToStorage = async (file, subjectId, topicId) => {
+  const storage = await ensureStorage();
+  if (!storage) throw new Error('Storage indisponível');
+  const path = `topics/${subjectId}/${topicId}-${Date.now()}`;
+  const ref = storage.ref().child(path);
+  await ref.put(file);
+  return ref.getDownloadURL();
+};
+
+const stripImages = (subjects) =>
+  (subjects || []).map((subject) => ({
+    ...subject,
+    topics: (subject.topics || []).map((t) => {
+      const { image, imageUrl, ...rest } = t;
+      return { ...rest, hasImage: !!(imageUrl || image), imageUrl: imageUrl || null };
+    }),
+  }));
+
+const mergeRemoteWithLocalImages = (remoteSubjects, localSubjects) =>
+  (remoteSubjects || []).map((remoteSubject) => {
+    const localSubject = (localSubjects || []).find((s) => s.id === remoteSubject.id);
+    return {
+      ...remoteSubject,
+      topics: (remoteSubject.topics || []).map((rt) => {
+        const localTopic = localSubject?.topics?.find((t) => t.id === rt.id);
+        return { ...rt, image: localTopic?.image, imageUrl: localTopic?.imageUrl || rt.imageUrl || null };
+      }),
+    };
+  });
+
 const normalizeState = (items) => {
   if (!Array.isArray(items)) return [];
   return items.map((subject) => ({
     id: subject.id || uid(),
     title: subject.title || 'Assunto',
     topics: Array.isArray(subject.topics)
-      ? subject.topics.map((t) => ({ id: t.id || uid(), text: t.text || 'Tópico', done: !!t.done, image: t.image }))
+      ? subject.topics.map((t) => ({ id: t.id || uid(), text: t.text || 'Tópico', done: !!t.done, image: t.image, imageUrl: t.imageUrl || null }))
       : [],
   }));
 };
@@ -206,6 +242,7 @@ const persistSnapshotToFirestore = async (snapshot) => {
     if (!db) return;
     const payload = {
       ...snapshot,
+      subjects: stripImages(snapshot.subjects),
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
     };
     await db.collection(FIRESTORE_COLLECTION).doc(snapshot.id).set(payload);
@@ -219,7 +256,7 @@ const persistStateToFirestore = async () => {
     const db = await initFirestore();
     if (!db) return;
     const payload = {
-      subjects: JSON.parse(JSON.stringify(state)),
+      subjects: stripImages(state),
       updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
     };
     await db.collection(FIRESTORE_STATE_COLLECTION).doc(FIRESTORE_STATE_DOC).set(payload, { merge: true });
@@ -241,7 +278,7 @@ const fetchStateFromFirestore = async () => {
     const data = doc.data() || {};
     const remoteSubjects = normalizeState(data.subjects || []);
     if (!remoteSubjects.length) return;
-    state = remoteSubjects;
+    state = mergeRemoteWithLocalImages(remoteSubjects, state);
     save();
     render();
     setSyncStatus('Estado atualizado da nuvem', 'online');
@@ -270,7 +307,7 @@ const subscribeStateFromFirestore = async () => {
         const current = JSON.stringify(state);
         const incoming = JSON.stringify(remoteSubjects);
         if (current === incoming) return;
-        state = remoteSubjects;
+        state = mergeRemoteWithLocalImages(remoteSubjects, state);
         localStorage.setItem(storageKey, JSON.stringify(state));
         render();
         setSyncStatus('Estado em tempo real atualizado', 'online');
@@ -513,15 +550,16 @@ const renderHistory = () => {
         (sub.topics || []).forEach((t) => {
           const li = document.createElement('li');
           li.className = t.done ? 'done' : '';
-          const imageTag = t.image ? ' (imagem)' : '';
+          const hasImg = !!(t.imageUrl || t.image);
+          const imageTag = hasImg ? ' (imagem)' : '';
           li.textContent = `${t.done ? '✓' : '•'} ${t.text}${imageTag}`;
-          if (t.image) {
+          if (hasImg) {
             const btn = document.createElement('button');
             btn.type = 'button';
             btn.className = 'btn btn-secondary btn-ghost';
             btn.textContent = 'Ver imagem';
             btn.style.marginLeft = '8px';
-            btn.addEventListener('click', () => openImageModal(t.image, t.text));
+            btn.addEventListener('click', () => openImageModal(t.imageUrl || t.image, t.text));
             li.appendChild(btn);
           }
           list.appendChild(li);
@@ -618,11 +656,11 @@ const render = () => {
 
     li.append(label, actions);
 
-    if (topic.image) {
+    if (topic.image || topic.imageUrl) {
       const imageWrap = document.createElement('div');
       imageWrap.className = 'topic-image';
       const img = document.createElement('img');
-      img.src = topic.image;
+      img.src = topic.imageUrl || topic.image;
       img.alt = `Imagem de ${topic.text}`;
       const imageActions = document.createElement('div');
       imageActions.className = 'topic-image-actions';
@@ -869,12 +907,17 @@ $subjects.addEventListener('click', (event) => {
   const openImageId = event.target.dataset.openImage;
   if (openImageId) {
     const topic = subject.topics.find((t) => t.id === openImageId);
-    if (!topic || !topic.image) return;
-    const blobUrl = dataUrlToBlobUrl(topic.image);
-    if (!blobUrl) return;
-    const opened = window.open(blobUrl, '_blank');
-    if (!opened) return;
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 15000);
+    if (!topic || (!topic.image && !topic.imageUrl)) return;
+    const target = topic.imageUrl || topic.image;
+    if (target.startsWith('data:')) {
+      const blobUrl = dataUrlToBlobUrl(target);
+      if (!blobUrl) return;
+      const opened = window.open(blobUrl, '_blank');
+      if (!opened) return;
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 15000);
+    } else {
+      window.open(target, '_blank');
+    }
     return;
   }
 
@@ -883,6 +926,7 @@ $subjects.addEventListener('click', (event) => {
     const topic = subject.topics.find((t) => t.id === clearImageId);
     if (!topic) return;
     delete topic.image;
+    delete topic.imageUrl;
     save();
     render();
     return;
@@ -905,20 +949,24 @@ $imageInput.addEventListener('change', (event) => {
     $imageInput.value = '';
     return;
   }
-
-  const reader = new FileReader();
-  reader.onload = () => {
-    const subject = state.find((s) => s.id === subjectId);
-    if (!subject) return;
-    const topic = subject.topics.find((t) => t.id === topicId);
-    if (!topic) return;
-    topic.image = reader.result;
-    save();
-    render();
-    $imageInput.value = '';
-  };
-
-  reader.readAsDataURL(file);
+  (async () => {
+    try {
+      const url = await uploadImageToStorage(file, subjectId, topicId);
+      const subject = state.find((s) => s.id === subjectId);
+      if (!subject) return;
+      const topic = subject.topics.find((t) => t.id === topicId);
+      if (!topic) return;
+      delete topic.image;
+      topic.imageUrl = url;
+      save();
+      render();
+    } catch (err) {
+      console.warn('Falha ao enviar imagem', err);
+      alert('Erro ao enviar imagem. Tente novamente.');
+    } finally {
+      $imageInput.value = '';
+    }
+  })();
 });
 
 $subjects.addEventListener('submit', (event) => {
@@ -985,7 +1033,7 @@ $saveDay.addEventListener('click', async () => {
   const snapshot = {
     id: uid(),
     savedAt: new Date().toISOString(),
-    subjects: JSON.parse(JSON.stringify(state)),
+    subjects: JSON.parse(JSON.stringify(stripImages(state))),
     justification: justification || null,
     pending: undoneTopics,
   };
