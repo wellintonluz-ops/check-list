@@ -60,6 +60,9 @@ const debounce = (fn, delay = 400) => {
   };
 };
 
+// Placeholder to avoid undefined before debounce is attached
+let persistStateToFirestoreDebounced = () => Promise.resolve();
+
 const normalizeState = (items) => {
   if (!Array.isArray(items)) return [];
   return items.map((subject) => ({
@@ -224,7 +227,7 @@ const persistStateToFirestore = async () => {
   }
 };
 
-const persistStateToFirestoreDebounced = debounce(persistStateToFirestore, 350);
+persistStateToFirestoreDebounced = debounce(persistStateToFirestore, 350);
 
 const fetchStateFromFirestore = async () => {
   try {
