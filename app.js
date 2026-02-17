@@ -1120,12 +1120,29 @@ $saveDay.addEventListener('click', async () => {
     console.warn('Continuando com histórico local, mas o Firestore falhou', err);
     setSyncStatus('Erro ao salvar histórico', 'error');
   }
+
+  const imagesToClear = [];
+  state.forEach((subject) => {
+    (subject.topics || []).forEach((topic) => {
+      if (topic.hasImage) imagesToClear.push(topic.id);
+    });
+  });
+
+  if (imagesToClear.length) {
+    try {
+      await Promise.all(imagesToClear.map((id) => deleteTopicImage(id).catch(() => null)));
+    } catch (err) {
+      console.warn('Falha ao limpar imagens após salvar', err);
+    }
+    imagesToClear.forEach((id) => imageCache.delete(id));
+  }
+
   state = state.map((subject) => ({
     ...subject,
     topics: Array.isArray(subject.topics)
       ? subject.topics.map((t) => {
         const { image, ...rest } = t;
-        return { ...rest, done: false };
+        return { ...rest, done: false, hasImage: false };
       })
       : [],
   }));
