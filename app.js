@@ -1075,7 +1075,8 @@ $saveDay.addEventListener('click', async () => {
   const missingImages = [];
   state.forEach((subject) => {
     (subject.topics || []).forEach((topic) => {
-      if (topic.done && !topic.hasImage) missingImages.push(`${subject.title} - ${topic.text}`);
+      const hasImg = !!(topic.hasImage || imageCache.has(topic.id));
+      if (topic.done && !hasImg) missingImages.push(`${subject.title} - ${topic.text}`);
     });
   });
   if (missingImages.length) {
