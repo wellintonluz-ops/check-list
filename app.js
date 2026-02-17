@@ -64,6 +64,11 @@ const debounce = (fn, delay = 400) => {
 // Placeholder to avoid undefined before debounce is attached
 let persistStateToFirestoreDebounced = () => Promise.resolve();
 
+const logError = (scope, err, extra) => {
+  const details = err && err.message ? err.message : err;
+  console.error('[Checklist]', scope, extra || '', details);
+};
+
 const imageCache = new Map();
 
 const compressImageFile = (file, maxSize = 1280, quality = 0.72) =>
@@ -91,34 +96,68 @@ const compressImageFile = (file, maxSize = 1280, quality = 0.72) =>
     reader.readAsDataURL(file);
   });
 
+const compressDataUrl = (dataUrl, maxSize = 800, quality = 0.7) =>
+  new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      let { width, height } = img;
+      const ratio = Math.min(maxSize / width, maxSize / height, 1);
+      width = Math.round(width * ratio);
+      height = Math.round(height * ratio);
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+      const out = canvas.toDataURL('image/jpeg', quality);
+      resolve(out);
+    };
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+
 const saveTopicImage = async (topicId, dataUrl) => {
-  const db = await initFirestore();
-  if (!db) throw new Error('Firestore indisponível');
-  await db
-    .collection(FIRESTORE_IMAGES_COLLECTION)
-    .doc(topicId)
-    .set({ imageData: dataUrl, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
-  imageCache.set(topicId, dataUrl);
+  try {
+    const db = await initFirestore();
+    if (!db) throw new Error('Firestore indisponível');
+    await db
+      .collection(FIRESTORE_IMAGES_COLLECTION)
+      .doc(topicId)
+      .set({ imageData: dataUrl, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    imageCache.set(topicId, dataUrl);
+  } catch (err) {
+    logError('saveTopicImage', err, { topicId });
+    throw err;
+  }
 };
 
 const fetchTopicImage = async (topicId) => {
   if (!topicId) return null;
   if (imageCache.has(topicId)) return imageCache.get(topicId);
-  const db = await initFirestore();
-  if (!db) return null;
-  const doc = await db.collection(FIRESTORE_IMAGES_COLLECTION).doc(topicId).get();
-  if (!doc.exists) return null;
-  const data = doc.data() || {};
-  const image = data.imageData || null;
-  if (image) imageCache.set(topicId, image);
-  return image;
+  try {
+    const db = await initFirestore();
+    if (!db) return null;
+    const doc = await db.collection(FIRESTORE_IMAGES_COLLECTION).doc(topicId).get();
+    if (!doc.exists) return null;
+    const data = doc.data() || {};
+    const image = data.imageData || null;
+    if (image) imageCache.set(topicId, image);
+    return image;
+  } catch (err) {
+    logError('fetchTopicImage', err, { topicId });
+    return null;
+  }
 };
 
 const deleteTopicImage = async (topicId) => {
-  const db = await initFirestore();
-  if (!db) return;
-  await db.collection(FIRESTORE_IMAGES_COLLECTION).doc(topicId).delete();
-  imageCache.delete(topicId);
+  try {
+    const db = await initFirestore();
+    if (!db) return;
+    await db.collection(FIRESTORE_IMAGES_COLLECTION).doc(topicId).delete();
+    imageCache.delete(topicId);
+  } catch (err) {
+    logError('deleteTopicImage', err, { topicId });
+  }
 };
 
 const stripImages = (subjects) =>
@@ -295,7 +334,7 @@ const persistSnapshotToFirestore = async (snapshot) => {
     };
     await db.collection(FIRESTORE_COLLECTION).doc(snapshot.id).set(payload);
   } catch (err) {
-    console.warn('Falha ao salvar no Firestore', err);
+    logError('persistSnapshotToFirestore', err, { snapshotId: snapshot.id });
   }
 };
 
@@ -611,7 +650,9 @@ const renderHistory = () => {
               btn.disabled = true;
               btn.textContent = 'Carregando...';
               try {
-                const dataUrl = imageCache.get(t.id) || (await fetchTopicImage(t.id));
+                const snapshotImages = snapshot.images || {};
+                const inline = snapshotImages[t.id];
+                const dataUrl = inline || imageCache.get(t.id) || (await fetchTopicImage(t.id));
                 if (!dataUrl) {
                   alert('Imagem não encontrada. Verifique permissões do Firestore em topicImages.');
                   return;
@@ -1044,7 +1085,7 @@ $imageInput.addEventListener('change', (event) => {
       save();
       render();
     } catch (err) {
-      console.warn('Falha ao processar/salvar imagem', err);
+      logError('handleImageUpload', err, { subjectId, topicId });
       alert('Erro ao enviar imagem. Tente novamente.');
     } finally {
       $imageInput.value = '';
@@ -1121,13 +1162,27 @@ $saveDay.addEventListener('click', async () => {
     justification: justification || null,
     pending: undoneTopics,
   };
+  snapshot.images = {};
+  for (const subject of state) {
+    for (const topic of subject.topics || []) {
+      if (!topic.hasImage) continue;
+      try {
+        const dataUrl = imageCache.get(topic.id) || (await fetchTopicImage(topic.id));
+        if (!dataUrl) continue;
+        const compressed = await compressDataUrl(dataUrl, 900, 0.7);
+        snapshot.images[topic.id] = compressed;
+      } catch (err) {
+        logError('snapshotEmbedImage', err, { topicId: topic.id });
+      }
+    }
+  }
   history.unshift(snapshot);
   history = history.slice(0, 30);
   saveHistory();
   try {
     await persistSnapshotToFirestore(snapshot);
   } catch (err) {
-    console.warn('Continuando com histórico local, mas o Firestore falhou', err);
+    logError('saveDay:historyPersist', err, { snapshotId: snapshot.id });
     setSyncStatus('Erro ao salvar histórico', 'error');
   }
 
