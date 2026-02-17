@@ -66,7 +66,8 @@ let persistStateToFirestoreDebounced = () => Promise.resolve();
 const ensureStorage = async () => {
   const db = await initFirestore();
   if (!db || typeof firebase === 'undefined' || !firebase.storage) return null;
-  return firebase.storage();
+  const bucket = firebaseConfig.storageBucket || 'check-list-a8af4.appspot.com';
+  return firebase.app().storage(`gs://${bucket}`);
 };
 
 const uploadImageToStorage = async (file, subjectId, topicId) => {
