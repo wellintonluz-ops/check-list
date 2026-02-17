@@ -55,6 +55,31 @@
 			margin-bottom: 20px;
 		}
 
+		.sync-status {
+			display: inline-flex;
+			align-items: center;
+			gap: 8px;
+			padding: 8px 12px;
+			border-radius: 12px;
+			border: 1px solid var(--stroke);
+			background: rgba(255, 255, 255, 0.04);
+			color: #d9e2ff;
+			font-size: 14px;
+		}
+
+		.sync-status::before {
+			content: '';
+			width: 10px;
+			height: 10px;
+			border-radius: 999px;
+			background: var(--muted);
+			box-shadow: 0 0 0 6px rgba(255, 255, 255, 0.03);
+		}
+
+		.sync-status[data-state="online"]::before { background: #33f0c3; box-shadow: 0 0 0 6px rgba(51, 240, 195, 0.14); }
+		.sync-status[data-state="syncing"]::before { background: #f6a03c; box-shadow: 0 0 0 6px rgba(246, 160, 60, 0.14); }
+		.sync-status[data-state="error"]::before { background: #ff6b6b; box-shadow: 0 0 0 6px rgba(255, 107, 107, 0.14); }
+
 		.header-actions {
 			display: flex;
 			align-items: center;
@@ -423,6 +448,7 @@
 					<div class="muted">Organize itens por categoria e acompanhe o progresso.</div>
 				</div>
 				<div class="header-actions">
+					<div class="sync-status" id="sync-status" data-state="syncing">Conectando...</div>
 					<div class="hint">Ctrl/Cmd + S: tudo fica salvo localmente</div>
 					<button class="btn btn-secondary" id="login-btn" type="button">Login</button>
 					<button class="btn btn-secondary btn-ghost" id="logout-btn" type="button">Sair</button>

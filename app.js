@@ -20,6 +20,7 @@ const $historyEmpty = document.getElementById('history-empty');
 const $imageModal = document.getElementById('image-modal');
 const $imageModalImg = document.getElementById('image-modal-img');
 const $imageModalClose = document.getElementById('image-modal-close');
+const $syncStatus = document.getElementById('sync-status');
 
 const firebaseConfig = {
   apiKey: 'AIzaSyCQ-ggnG6xU-I51DkWwhzwyXrUTsWTzpbU',
@@ -38,11 +39,26 @@ let firestoreDb = null;
 let isFirestoreReady = false;
 let anonAuthPromise = null;
 let unsubscribeState = null;
+let unsubscribeHistory = null;
 
 const uid = () => (window.crypto && crypto.randomUUID ? crypto.randomUUID() : `id-${Date.now()}-${Math.random().toString(16).slice(2)}`);
 
 const authKey = 'checklist-auth-v1';
 let isLoggedIn = false;
+
+const setSyncStatus = (text, state = 'syncing') => {
+  if (!$syncStatus) return;
+  $syncStatus.textContent = text;
+  $syncStatus.dataset.state = state;
+};
+
+const debounce = (fn, delay = 400) => {
+  let t;
+  return (...args) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), delay);
+  };
+};
 
 const normalizeState = (items) => {
   if (!Array.isArray(items)) return [];
@@ -92,7 +108,7 @@ const load = () => {
 
 const save = () => {
   localStorage.setItem(storageKey, JSON.stringify(state));
-  persistStateToFirestore().catch((err) => console.warn('Falha ao salvar estado no Firestore', err));
+  persistStateToFirestoreDebounced().catch((err) => console.warn('Falha ao salvar estado no Firestore', err));
 };
 const saveHistory = () => localStorage.setItem(historyKey, JSON.stringify(history));
 const saveAuth = () => localStorage.setItem(authKey, isLoggedIn ? '1' : '0');
@@ -171,8 +187,10 @@ const fetchHistoryFromFirestore = async () => {
     history = merged.slice(0, 50);
     saveHistory();
     if (activeTab === 'history') renderHistory();
+    setSyncStatus('Histórico carregado da nuvem', 'online');
   } catch (err) {
     console.warn('Falha ao carregar histórico do Firestore', err);
+    setSyncStatus('Erro ao carregar histórico', 'error');
   }
 };
 
@@ -199,10 +217,14 @@ const persistStateToFirestore = async () => {
       updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
     };
     await db.collection(FIRESTORE_STATE_COLLECTION).doc(FIRESTORE_STATE_DOC).set(payload, { merge: true });
+    setSyncStatus('Estado salvo na nuvem', 'online');
   } catch (err) {
     console.warn('Falha ao salvar estado no Firestore', err);
+    setSyncStatus('Erro ao salvar na nuvem', 'error');
   }
 };
+
+const persistStateToFirestoreDebounced = debounce(persistStateToFirestore, 350);
 
 const fetchStateFromFirestore = async () => {
   try {
@@ -216,8 +238,10 @@ const fetchStateFromFirestore = async () => {
     state = remoteSubjects;
     save();
     render();
+    setSyncStatus('Estado atualizado da nuvem', 'online');
   } catch (err) {
     console.warn('Falha ao carregar estado do Firestore', err);
+    setSyncStatus('Erro ao atualizar da nuvem', 'error');
   }
 };
 
@@ -243,9 +267,11 @@ const subscribeStateFromFirestore = async () => {
         state = remoteSubjects;
         localStorage.setItem(storageKey, JSON.stringify(state));
         render();
+        setSyncStatus('Estado em tempo real atualizado', 'online');
       });
   } catch (err) {
     console.warn('Falha ao escutar estado do Firestore', err);
+    setSyncStatus('Erro ao escutar estado', 'error');
   }
 };
 
@@ -260,8 +286,10 @@ const deleteHistoryEntry = async (snapshotId) => {
     const db = await initFirestore();
     if (!db) return;
     await db.collection(FIRESTORE_COLLECTION).doc(snapshotId).delete();
+    setSyncStatus('Histórico removido na nuvem', 'online');
   } catch (err) {
     console.warn('Falha ao remover do Firestore', err);
+    setSyncStatus('Erro ao remover histórico', 'error');
   }
 };
 
@@ -292,6 +320,41 @@ if ($imageModal) {
 window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') closeImageModal();
 });
+
+const subscribeHistoryFromFirestore = async () => {
+  try {
+    const db = await initFirestore();
+    if (!db) return;
+    if (unsubscribeHistory) return;
+    unsubscribeHistory = db
+      .collection(FIRESTORE_COLLECTION)
+      .orderBy('savedAt', 'desc')
+      .limit(50)
+      .onSnapshot((snap) => {
+        const remoteHistory = snap.docs.map((doc) => {
+          const data = doc.data() || {};
+          return {
+            id: doc.id,
+            savedAt: data.savedAt || new Date().toISOString(),
+            subjects: normalizeState(data.subjects),
+            justification: data.justification || null,
+            pending: Array.isArray(data.pending) ? data.pending : [],
+          };
+        });
+        const merged = [...remoteHistory];
+        history.forEach((item) => {
+          if (!merged.find((r) => r.id === item.id)) merged.push(item);
+        });
+        history = merged.slice(0, 50);
+        saveHistory();
+        if (activeTab === 'history') renderHistory();
+        setSyncStatus('Histórico em tempo real atualizado', 'online');
+      });
+  } catch (err) {
+    console.warn('Falha ao escutar histórico do Firestore', err);
+    setSyncStatus('Erro ao escutar histórico', 'error');
+  }
+};
 
 const updateAuthUI = () => {
   const locked = !isLoggedIn;
@@ -927,6 +990,7 @@ $saveDay.addEventListener('click', async () => {
     await persistSnapshotToFirestore(snapshot);
   } catch (err) {
     console.warn('Continuando com histórico local, mas o Firestore falhou', err);
+    setSyncStatus('Erro ao salvar histórico', 'error');
   }
   state = state.map((subject) => ({
     ...subject,
@@ -942,10 +1006,24 @@ $saveDay.addEventListener('click', async () => {
   setTab('history');
 });
 
-render();
-renderHistory();
-setTab(activeTab);
-updateAuthUI();
-fetchHistoryFromFirestore();
-fetchStateFromFirestore();
-subscribeStateFromFirestore();
+const startApp = async () => {
+  render();
+  renderHistory();
+  setTab(activeTab);
+  updateAuthUI();
+
+  setSyncStatus('Conectando à nuvem...', 'syncing');
+  const db = await initFirestore();
+  if (!db) {
+    setSyncStatus('Offline: Firestore indisponível', 'error');
+    return;
+  }
+
+  setSyncStatus('Online - sincronizando', 'online');
+  fetchStateFromFirestore();
+  fetchHistoryFromFirestore();
+  subscribeStateFromFirestore();
+  subscribeHistoryFromFirestore();
+};
+
+startApp();
