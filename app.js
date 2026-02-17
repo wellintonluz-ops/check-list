@@ -608,9 +608,19 @@ const renderHistory = () => {
             btn.textContent = 'Ver imagem';
             btn.style.marginLeft = '8px';
             btn.addEventListener('click', async () => {
-              const dataUrl = imageCache.get(t.id) || (await fetchTopicImage(t.id));
-              if (!dataUrl) return;
-              openImageModal(dataUrl, t.text);
+              btn.disabled = true;
+              btn.textContent = 'Carregando...';
+              try {
+                const dataUrl = imageCache.get(t.id) || (await fetchTopicImage(t.id));
+                if (!dataUrl) {
+                  alert('Imagem não encontrada. Verifique permissões do Firestore em topicImages.');
+                  return;
+                }
+                openImageModal(dataUrl, t.text);
+              } finally {
+                btn.disabled = false;
+                btn.textContent = 'Ver imagem';
+              }
             });
             li.appendChild(btn);
           }
