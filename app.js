@@ -111,7 +111,10 @@ const load = () => {
 
 const save = () => {
   localStorage.setItem(storageKey, JSON.stringify(state));
-  persistStateToFirestoreDebounced().catch((err) => console.warn('Falha ao salvar estado no Firestore', err));
+  const persistFn = typeof persistStateToFirestoreDebounced === 'function' ? persistStateToFirestoreDebounced : null;
+  if (persistFn) {
+    Promise.resolve(persistFn()).catch((err) => console.warn('Falha ao salvar estado no Firestore', err));
+  }
 };
 const saveHistory = () => localStorage.setItem(historyKey, JSON.stringify(history));
 const saveAuth = () => localStorage.setItem(authKey, isLoggedIn ? '1' : '0');
