@@ -1131,13 +1131,17 @@ $saveDay.addEventListener('click', async () => {
     setSyncStatus('Erro ao salvar histórico', 'error');
   }
 
-  state = state.map((subject) => ({
-    ...subject,
+  const resetStateFrom = state;
+  state = resetStateFrom.map((subject) => ({
+    id: uid(),
+    title: subject.title,
     topics: Array.isArray(subject.topics)
-      ? subject.topics.map((t) => {
-        const { image, ...rest } = t;
-        return { ...rest, done: false, hasImage: false };
-      })
+      ? subject.topics.map((t) => ({
+          id: uid(),
+          text: t.text,
+          done: false,
+          hasImage: false,
+        }))
       : [],
   }));
   save();
