@@ -26,7 +26,7 @@ const firebaseConfig = {
   apiKey: 'AIzaSyCQ-ggnG6xU-I51DkWwhzwyXrUTsWTzpbU',
   authDomain: 'check-list-a8af4.firebaseapp.com',
   projectId: 'check-list-a8af4',
-  storageBucket: 'check-list-a8af4.firebasestorage.app',
+  storageBucket: 'check-list-a8af4.appspot.com',
   messagingSenderId: '569484320290',
   appId: '1:569484320290:web:014218d2a7093df399b47b',
   measurementId: 'G-7MNT6RMEHG',
