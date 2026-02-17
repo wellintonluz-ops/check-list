@@ -1121,23 +1121,6 @@ $saveDay.addEventListener('click', async () => {
     setSyncStatus('Erro ao salvar histórico', 'error');
   }
 
-  const imagesToClear = [];
-  state.forEach((subject) => {
-    (subject.topics || []).forEach((topic) => {
-      if (topic.hasImage) imagesToClear.push(topic.id);
-    });
-  });
-
-  if (imagesToClear.length) {
-    try {
-      await Promise.all(imagesToClear.map((id) => deleteTopicImage(id).catch(() => null)));
-    } catch (err) {
-      console.warn('Falha ao limpar imagens após salvar', err);
-    }
-    imagesToClear.forEach((id) => imageCache.delete(id));
-    if (imageCache.size === 0) imageCache.clear();
-  }
-
   state = state.map((subject) => ({
     ...subject,
     topics: Array.isArray(subject.topics)
@@ -1150,6 +1133,7 @@ $saveDay.addEventListener('click', async () => {
   save();
   // força persistência imediata para evitar que o listener remoto reponha imagens antigas
   persistStateToFirestore().catch((err) => console.warn('Falha ao persistir estado limpo', err));
+  imageCache.clear();
   render();
   setTab('history');
 });
