@@ -35,6 +35,7 @@ const firebaseConfig = {
 const FIRESTORE_COLLECTION = 'checklistSnapshots';
 const FIRESTORE_STATE_COLLECTION = 'checklistState';
 const FIRESTORE_STATE_DOC = 'shared';
+const FIRESTORE_IMAGES_COLLECTION = 'topicImages';
 let firestoreDb = null;
 let isFirestoreReady = false;
 let anonAuthPromise = null;
@@ -63,28 +64,69 @@ const debounce = (fn, delay = 400) => {
 // Placeholder to avoid undefined before debounce is attached
 let persistStateToFirestoreDebounced = () => Promise.resolve();
 
-const ensureStorage = async () => {
+const imageCache = new Map();
+
+const compressImageFile = (file, maxSize = 1280, quality = 0.72) =>
+  new Promise((resolve, reject) => {
+    const img = new Image();
+    const reader = new FileReader();
+    reader.onload = () => {
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let { width, height } = img;
+        const ratio = Math.min(maxSize / width, maxSize / height, 1);
+        width = Math.round(width * ratio);
+        height = Math.round(height * ratio);
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+        resolve(dataUrl);
+      };
+      img.onerror = reject;
+      img.src = reader.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+
+const saveTopicImage = async (topicId, dataUrl) => {
   const db = await initFirestore();
-  if (!db || typeof firebase === 'undefined' || !firebase.storage) return null;
-  const bucket = firebaseConfig.storageBucket || 'check-list-a8af4.appspot.com';
-  return firebase.app().storage(`gs://${bucket}`);
+  if (!db) throw new Error('Firestore indisponível');
+  await db
+    .collection(FIRESTORE_IMAGES_COLLECTION)
+    .doc(topicId)
+    .set({ imageData: dataUrl, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+  imageCache.set(topicId, dataUrl);
 };
 
-const uploadImageToStorage = async (file, subjectId, topicId) => {
-  const storage = await ensureStorage();
-  if (!storage) throw new Error('Storage indisponível');
-  const path = `topics/${subjectId}/${topicId}-${Date.now()}`;
-  const ref = storage.ref().child(path);
-  await ref.put(file);
-  return ref.getDownloadURL();
+const fetchTopicImage = async (topicId) => {
+  if (!topicId) return null;
+  if (imageCache.has(topicId)) return imageCache.get(topicId);
+  const db = await initFirestore();
+  if (!db) return null;
+  const doc = await db.collection(FIRESTORE_IMAGES_COLLECTION).doc(topicId).get();
+  if (!doc.exists) return null;
+  const data = doc.data() || {};
+  const image = data.imageData || null;
+  if (image) imageCache.set(topicId, image);
+  return image;
+};
+
+const deleteTopicImage = async (topicId) => {
+  const db = await initFirestore();
+  if (!db) return;
+  await db.collection(FIRESTORE_IMAGES_COLLECTION).doc(topicId).delete();
+  imageCache.delete(topicId);
 };
 
 const stripImages = (subjects) =>
   (subjects || []).map((subject) => ({
     ...subject,
     topics: (subject.topics || []).map((t) => {
-      const { image, imageUrl, ...rest } = t;
-      return { ...rest, hasImage: !!(imageUrl || image), imageUrl: imageUrl || null };
+      const { image, imageUrl, hasImage, ...rest } = t;
+      return { ...rest, hasImage: !!(hasImage || imageUrl || image) };
     }),
   }));
 
@@ -95,7 +137,7 @@ const mergeRemoteWithLocalImages = (remoteSubjects, localSubjects) =>
       ...remoteSubject,
       topics: (remoteSubject.topics || []).map((rt) => {
         const localTopic = localSubject?.topics?.find((t) => t.id === rt.id);
-        return { ...rt, image: localTopic?.image, imageUrl: localTopic?.imageUrl || rt.imageUrl || null };
+        return { ...rt, hasImage: !!(rt.hasImage || localTopic?.hasImage) };
       }),
     };
   });
@@ -106,7 +148,12 @@ const normalizeState = (items) => {
     id: subject.id || uid(),
     title: subject.title || 'Assunto',
     topics: Array.isArray(subject.topics)
-      ? subject.topics.map((t) => ({ id: t.id || uid(), text: t.text || 'Tópico', done: !!t.done, image: t.image, imageUrl: t.imageUrl || null }))
+      ? subject.topics.map((t) => ({
+          id: t.id || uid(),
+          text: t.text || 'Tópico',
+          done: !!t.done,
+          hasImage: !!(t.hasImage || t.image || t.imageUrl),
+        }))
       : [],
   }));
 };
@@ -551,7 +598,7 @@ const renderHistory = () => {
         (sub.topics || []).forEach((t) => {
           const li = document.createElement('li');
           li.className = t.done ? 'done' : '';
-          const hasImg = !!(t.imageUrl || t.image);
+          const hasImg = !!t.hasImage;
           const imageTag = hasImg ? ' (imagem)' : '';
           li.textContent = `${t.done ? '✓' : '•'} ${t.text}${imageTag}`;
           if (hasImg) {
@@ -560,7 +607,11 @@ const renderHistory = () => {
             btn.className = 'btn btn-secondary btn-ghost';
             btn.textContent = 'Ver imagem';
             btn.style.marginLeft = '8px';
-            btn.addEventListener('click', () => openImageModal(t.imageUrl || t.image, t.text));
+            btn.addEventListener('click', async () => {
+              const dataUrl = imageCache.get(t.id) || (await fetchTopicImage(t.id));
+              if (!dataUrl) return;
+              openImageModal(dataUrl, t.text);
+            });
             li.appendChild(btn);
           }
           list.appendChild(li);
@@ -657,11 +708,12 @@ const render = () => {
 
     li.append(label, actions);
 
-    if (topic.image || topic.imageUrl) {
+    if (topic.hasImage) {
       const imageWrap = document.createElement('div');
       imageWrap.className = 'topic-image';
       const img = document.createElement('img');
-      img.src = topic.imageUrl || topic.image;
+      const cached = imageCache.get(topic.id);
+      img.src = cached || '';
       img.alt = `Imagem de ${topic.text}`;
       const imageActions = document.createElement('div');
       imageActions.className = 'topic-image-actions';
@@ -678,6 +730,15 @@ const render = () => {
       imageActions.append(openBtn, clearBtn);
       imageWrap.append(img, imageActions);
       li.appendChild(imageWrap);
+
+      if (!cached) {
+        fetchTopicImage(topic.id).then((dataUrl) => {
+          if (dataUrl) {
+            imageCache.set(topic.id, dataUrl);
+            img.src = dataUrl;
+          }
+        });
+      }
     }
 
     return li;
@@ -908,17 +969,24 @@ $subjects.addEventListener('click', (event) => {
   const openImageId = event.target.dataset.openImage;
   if (openImageId) {
     const topic = subject.topics.find((t) => t.id === openImageId);
-    if (!topic || (!topic.image && !topic.imageUrl)) return;
-    const target = topic.imageUrl || topic.image;
-    if (target.startsWith('data:')) {
-      const blobUrl = dataUrlToBlobUrl(target);
+    if (!topic || !topic.hasImage) return;
+    const cached = imageCache.get(topic.id);
+    if (cached) {
+      const blobUrl = dataUrlToBlobUrl(cached);
       if (!blobUrl) return;
       const opened = window.open(blobUrl, '_blank');
       if (!opened) return;
       setTimeout(() => URL.revokeObjectURL(blobUrl), 15000);
-    } else {
-      window.open(target, '_blank');
+      return;
     }
+    fetchTopicImage(topic.id).then((dataUrl) => {
+      if (!dataUrl) return;
+      const blobUrl = dataUrlToBlobUrl(dataUrl);
+      if (!blobUrl) return;
+      const opened = window.open(blobUrl, '_blank');
+      if (!opened) return;
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 15000);
+    });
     return;
   }
 
@@ -928,6 +996,8 @@ $subjects.addEventListener('click', (event) => {
     if (!topic) return;
     delete topic.image;
     delete topic.imageUrl;
+    topic.hasImage = false;
+    deleteTopicImage(topic.id);
     save();
     render();
     return;
@@ -952,17 +1022,19 @@ $imageInput.addEventListener('change', (event) => {
   }
   (async () => {
     try {
-      const url = await uploadImageToStorage(file, subjectId, topicId);
+      const dataUrl = await compressImageFile(file);
       const subject = state.find((s) => s.id === subjectId);
       if (!subject) return;
       const topic = subject.topics.find((t) => t.id === topicId);
       if (!topic) return;
+      await saveTopicImage(topicId, dataUrl);
+      topic.hasImage = true;
       delete topic.image;
-      topic.imageUrl = url;
+      delete topic.imageUrl;
       save();
       render();
     } catch (err) {
-      console.warn('Falha ao enviar imagem', err);
+      console.warn('Falha ao processar/salvar imagem', err);
       alert('Erro ao enviar imagem. Tente novamente.');
     } finally {
       $imageInput.value = '';
