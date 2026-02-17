@@ -10,10 +10,7 @@ const $logoutBtn = document.getElementById('logout-btn');
 const $loginForm = document.getElementById('login-form');
 const $loginUser = document.getElementById('login-user');
 const $loginPass = document.getElementById('login-pass');
-const $loginStatus = document.getElementById('logiapp.js?v=2:1037 Falha ao processar/salvar imagem FirebaseError: Missing or insufficient permissions.
-    at index.esm2017.js:10913:34
-    at er.<anonymous> (index.esm2017.js:10865:21)
-n-status');
+const $loginStatus = document.getElementById('login-status');
 const $loginPanel = document.getElementById('login-panel');
 const $createSection = document.getElementById('create-section');
 const $tabButtons = document.querySelectorAll('[data-tab]');
