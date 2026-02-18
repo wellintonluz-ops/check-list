@@ -327,8 +327,10 @@ const persistSnapshotToFirestore = async (snapshot) => {
   try {
     const db = await initFirestore();
     if (!db) return;
+    // Não enviamos imagens embutidas para evitar estourar o limite de 1MB por documento do Firestore
+    const { images: _ignoredImages, ...rest } = snapshot;
     const payload = {
-      ...snapshot,
+      ...rest,
       subjects: stripImages(snapshot.subjects),
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
     };
