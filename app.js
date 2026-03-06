@@ -743,21 +743,23 @@ const render = () => {
     attachBtn.dataset.attach = topic.id;
     attachBtn.textContent = 'Foto/Imagem';
 
+    actions.appendChild(attachBtn);
+
     if (isLoggedIn) {
       const editBtn = document.createElement('button');
       editBtn.className = 'btn btn-secondary btn-ghost';
       editBtn.type = 'button';
       editBtn.dataset.editTopic = topic.id;
       editBtn.textContent = 'Editar';
-      actions.appendChild(editBtn);
-    }
 
-    const removeBtn = document.createElement('button');
-    removeBtn.className = 'btn btn-secondary';
-    removeBtn.type = 'button';
-    removeBtn.dataset.remove = topic.id;
-    removeBtn.textContent = 'Remover';
-    actions.append(attachBtn, removeBtn);
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'btn btn-secondary';
+      removeBtn.type = 'button';
+      removeBtn.dataset.remove = topic.id;
+      removeBtn.textContent = 'Remover';
+
+      actions.append(editBtn, removeBtn);
+    }
 
     li.append(label, actions);
 
@@ -1058,6 +1060,10 @@ $subjects.addEventListener('click', (event) => {
 
   const removeId = event.target.dataset.remove;
   if (removeId) {
+    if (!isLoggedIn) {
+      alert('Faça login para remover um tópico.');
+      return;
+    }
     subject.topics = subject.topics.filter((t) => t.id !== removeId);
     save();
     render();
