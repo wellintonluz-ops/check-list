@@ -55,6 +55,45 @@
 			margin-bottom: 20px;
 		}
 
+		.header-left {
+			display: flex;
+			flex-direction: column;
+			gap: 6px;
+		}
+
+		.brand {
+			display: inline-flex;
+			align-items: center;
+			gap: 12px;
+			padding: 10px 14px;
+			border-radius: 12px;
+			background: rgba(255, 255, 255, 0.04);
+			border: 1px solid var(--stroke);
+			box-shadow: var(--shadow);
+		}
+
+		.brand-text {
+			color: #dfe6f5;
+			font-weight: 600;
+			letter-spacing: 2px;
+		}
+
+		.brand-divider {
+			width: 2px;
+			height: 26px;
+			background: #e24848;
+			border-radius: 999px;
+		}
+
+		.brand-logo {
+			color: #0f253d;
+			background: linear-gradient(145deg, #f5f7ff, #dfe6f5);
+			padding: 6px 10px;
+			border-radius: 8px;
+			font-weight: 700;
+			letter-spacing: 1px;
+		}
+
 		.sync-status {
 			display: inline-flex;
 			align-items: center;
@@ -443,7 +482,12 @@
 	<main>
 		<div class="card">
 			<div class="header">
-				<div>
+				<div class="header-left">
+					<div class="brand" aria-label="Grupo TBX">
+						<span class="brand-text">GRUPO</span>
+						<span class="brand-divider" aria-hidden="true"></span>
+						<span class="brand-logo">TBX</span>
+					</div>
 					<h1>Checklist por Assunto</h1>
 					<div class="muted">Organize itens por categoria e acompanhe o progresso.</div>
 				</div>
