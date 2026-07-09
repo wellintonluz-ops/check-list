@@ -192,6 +192,14 @@ const normalizeState = (items) => {
           text: t.text || 'Tópico',
           done: !!t.done,
           hasImage: !!(t.hasImage || t.image || t.imageUrl),
+          validation:
+            t.validation && (t.validation.status === 'approved' || t.validation.status === 'rejected')
+              ? {
+                  status: t.validation.status,
+                  name: t.validation.name || '',
+                  validatedAt: t.validation.validatedAt || null,
+                }
+              : null,
         }))
       : [],
   }));
@@ -566,6 +574,67 @@ document.addEventListener('click', (event) => {
   }
 });
 
+const persistSnapshotSubjectsToFirestore = async (snapshotId, subjects) => {
+  try {
+    const db = await initFirestore();
+    if (!db) return;
+    await db
+      .collection(FIRESTORE_COLLECTION)
+      .doc(snapshotId)
+      .set({ subjects: stripImages(subjects) }, { merge: true });
+    setSyncStatus('Validação salva na nuvem', 'online');
+  } catch (err) {
+    logError('persistSnapshotSubjectsToFirestore', err, { snapshotId });
+    setSyncStatus('Erro ao salvar validação', 'error');
+  }
+};
+
+// Segundo checkout: o turno seguinte aprova ou reprova cada tópico do checklist salvo.
+// Regras: nome obrigatório, confirmação explícita e, uma vez definida, a validação é travada.
+const setTopicValidation = async (snapshotId, subjectId, topicId, status) => {
+  const snapshot = history.find((h) => h.id === snapshotId);
+  if (!snapshot) return;
+  const subject = (snapshot.subjects || []).find((s) => s.id === subjectId);
+  if (!subject) return;
+  const topic = (subject.topics || []).find((t) => t.id === topicId);
+  if (!topic) return;
+
+  if (topic.validation && (topic.validation.status === 'approved' || topic.validation.status === 'rejected')) {
+    alert('Este tópico já foi validado e não pode ser alterado.');
+    return;
+  }
+
+  const actionLabel = status === 'approved' ? 'aprovar' : 'reprovar';
+  const name = window.prompt(`Digite seu nome para ${actionLabel} o tópico "${topic.text}":`, '');
+  if (name === null) return;
+  const trimmedName = name.trim();
+  if (!trimmedName) {
+    alert('É obrigatório informar o nome para validar o tópico.');
+    return;
+  }
+
+  const statusLabel = status === 'approved' ? 'APROVAR' : 'REPROVAR';
+  const confirmed = window.confirm(
+    `Confirma ${statusLabel} o tópico "${topic.text}" como ${trimmedName}?\n\nEsta ação é definitiva: depois de confirmada, não poderá ser alterada.`
+  );
+  if (!confirmed) return;
+
+  topic.validation = {
+    status,
+    name: trimmedName,
+    validatedAt: new Date().toISOString(),
+  };
+
+  saveHistory();
+  renderHistory();
+
+  try {
+    await persistSnapshotSubjectsToFirestore(snapshotId, snapshot.subjects);
+  } catch (err) {
+    logError('setTopicValidation:persist', err, { snapshotId, topicId });
+  }
+};
+
 const renderHistory = () => {
   if (!$historyList || !$historyEmpty) return;
   $historyList.innerHTML = '';
@@ -590,11 +659,20 @@ const renderHistory = () => {
     const totalTopics = (snapshot.subjects || []).reduce((acc, s) => acc + ((s.topics || []).length), 0);
     const doneTopics = (snapshot.subjects || []).reduce((acc, s) => acc + (s.topics || []).filter((t) => t.done).length, 0);
     counts.textContent = `${doneTopics}/${totalTopics || 0} feitos`;
+
+    const validatedTopics = (snapshot.subjects || []).reduce(
+      (acc, s) => acc + (s.topics || []).filter((t) => t.validation).length,
+      0
+    );
+    const validationCounts = document.createElement('span');
+    validationCounts.className = 'muted';
+    validationCounts.textContent = `Validação: ${validatedTopics}/${totalTopics || 0}`;
+
     const toggle = document.createElement('button');
     toggle.type = 'button';
     toggle.className = 'history-toggle';
     toggle.textContent = 'Ver detalhes';
-    head.append(title, counts, toggle);
+    head.append(title, counts, validationCounts, toggle);
 
     if (isLoggedIn) {
       const deleteBtn = document.createElement('button');
@@ -639,15 +717,20 @@ const renderHistory = () => {
         (sub.topics || []).forEach((t) => {
           const li = document.createElement('li');
           li.className = t.done ? 'done' : '';
+
+          const row = document.createElement('div');
+          row.className = 'history-topic-row';
           const hasImg = !!t.hasImage;
           const imageTag = hasImg ? ' (imagem)' : '';
-          li.textContent = `${t.done ? '✓' : '•'} ${t.text}${imageTag}`;
+          const textSpan = document.createElement('span');
+          textSpan.textContent = `${t.done ? '✓' : '•'} ${t.text}${imageTag}`;
+          row.appendChild(textSpan);
+
           if (hasImg) {
             const btn = document.createElement('button');
             btn.type = 'button';
             btn.className = 'btn btn-secondary btn-ghost';
             btn.textContent = 'Ver imagem';
-            btn.style.marginLeft = '8px';
             btn.addEventListener('click', async () => {
               btn.disabled = true;
               btn.textContent = 'Carregando...';
@@ -665,8 +748,38 @@ const renderHistory = () => {
                 btn.textContent = 'Ver imagem';
               }
             });
-            li.appendChild(btn);
+            row.appendChild(btn);
           }
+
+          li.appendChild(row);
+
+          const valBox = document.createElement('div');
+          valBox.className = 'validation-box';
+
+          if (t.validation && (t.validation.status === 'approved' || t.validation.status === 'rejected')) {
+            const statusSpan = document.createElement('span');
+            statusSpan.className = `validation-status ${t.validation.status}`;
+            const statusLabel = t.validation.status === 'approved' ? 'Aprovado' : 'Reprovado';
+            const when = t.validation.validatedAt ? new Date(t.validation.validatedAt).toLocaleString('pt-BR') : '';
+            statusSpan.textContent = `${statusLabel} por ${t.validation.name}${when ? ` em ${when}` : ''}`;
+            valBox.appendChild(statusSpan);
+          } else {
+            const approveBtn = document.createElement('button');
+            approveBtn.type = 'button';
+            approveBtn.className = 'btn btn-approve';
+            approveBtn.textContent = 'Aprovar';
+            approveBtn.addEventListener('click', () => setTopicValidation(snapshot.id, sub.id, t.id, 'approved'));
+
+            const rejectBtn = document.createElement('button');
+            rejectBtn.type = 'button';
+            rejectBtn.className = 'btn btn-reject';
+            rejectBtn.textContent = 'Reprovar';
+            rejectBtn.addEventListener('click', () => setTopicValidation(snapshot.id, sub.id, t.id, 'rejected'));
+
+            valBox.append(approveBtn, rejectBtn);
+          }
+
+          li.appendChild(valBox);
           list.appendChild(li);
         });
       }
