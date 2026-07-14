@@ -229,9 +229,21 @@
 
 	.tabs {
 		display: flex;
-		gap: var(--space-2);
+		align-items: flex-end;
+		gap: var(--space-6);
 		margin: 0 0 var(--space-5);
 		border-bottom: 1px solid var(--stroke-soft);
+		flex-wrap: wrap;
+	}
+
+	.tab-group {
+		display: flex;
+		gap: var(--space-4);
+	}
+
+	.tab-group + .tab-group {
+		padding-left: var(--space-6);
+		border-left: 1px solid var(--stroke-soft);
 	}
 
 	.tab-btn {
@@ -240,7 +252,6 @@
 		border: none;
 		color: var(--muted);
 		padding: 10px 4px;
-		margin-right: var(--space-5);
 		cursor: pointer;
 		font-family: inherit;
 		font-size: 15px;
@@ -769,6 +780,17 @@
 		.card { padding: 18px; }
 		.header-main { align-items: flex-start; }
 		.header-actions { width: 100%; justify-content: flex-start; }
+		.tabs { gap: var(--space-2); }
+		.tab-group { gap: var(--space-3); flex-wrap: wrap; }
+		.tab-group + .tab-group {
+			padding-left: 0;
+			border-left: none;
+			border-top: 1px solid var(--stroke-soft);
+			padding-top: var(--space-2);
+			margin-top: var(--space-2);
+			width: 100%;
+		}
+		.tab-btn { font-size: 13px; }
 		form.add-subject { grid-template-columns: 1fr; }
 		.subject-header { flex-direction: column; align-items: flex-start; }
 		.subject-actions { justify-content: flex-start; width: 100%; }
@@ -818,8 +840,14 @@
 			</div>
 
 			<div class="tabs" role="tablist">
-				<button class="tab-btn active" data-tab="current" type="button">Checklist</button>
-				<button class="tab-btn" data-tab="history" type="button">Histórico</button>
+				<div class="tab-group">
+					<button class="tab-btn active" data-track="organizacao" data-view="current" type="button">CheckList - Organização</button>
+					<button class="tab-btn" data-track="organizacao" data-view="history" type="button">Histórico de Organização</button>
+				</div>
+				<div class="tab-group">
+					<button class="tab-btn" data-track="atividade" data-view="current" type="button">CheckList - Atividade</button>
+					<button class="tab-btn" data-track="atividade" data-view="history" type="button">Histórico de Atividades</button>
+				</div>
 			</div>
 
 			<div class="tab-panel active" data-panel="current">

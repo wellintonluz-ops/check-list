@@ -1,5 +1,22 @@
-const storageKey = 'checklist-app-v1';
-const historyKey = 'checklist-history-v1';
+const TRACKS = {
+  organizacao: {
+    storageKey: 'checklist-app-v1',
+    historyKey: 'checklist-history-v1',
+    firestoreSnapshots: 'checklistSnapshots',
+    firestoreState: 'checklistState',
+  },
+  atividade: {
+    storageKey: 'checklist-app-v1-atividade',
+    historyKey: 'checklist-history-v1-atividade',
+    firestoreSnapshots: 'checklistSnapshotsAtividade',
+    firestoreState: 'checklistStateAtividade',
+  },
+};
+const getTrackConfig = (track) => TRACKS[track] || TRACKS.organizacao;
+
+let activeTrackKey = 'organizacao';
+let storageKey = TRACKS.organizacao.storageKey;
+let historyKey = TRACKS.organizacao.historyKey;
 
 const $subjects = document.getElementById('subjects');
 const $form = document.getElementById('subject-form');
@@ -13,7 +30,7 @@ const $loginPass = document.getElementById('login-pass');
 const $loginStatus = document.getElementById('login-status');
 const $loginPanel = document.getElementById('login-panel');
 const $createSection = document.getElementById('create-section');
-const $tabButtons = document.querySelectorAll('[data-tab]');
+const $tabButtons = document.querySelectorAll('[data-view]');
 const $tabPanels = document.querySelectorAll('[data-panel]');
 const $historyList = document.getElementById('history-list');
 const $historyEmpty = document.getElementById('history-empty');
@@ -32,8 +49,8 @@ const firebaseConfig = {
   measurementId: 'G-7MNT6RMEHG',
 };
 
-const FIRESTORE_COLLECTION = 'checklistSnapshots';
-const FIRESTORE_STATE_COLLECTION = 'checklistState';
+let FIRESTORE_COLLECTION = TRACKS.organizacao.firestoreSnapshots;
+let FIRESTORE_STATE_COLLECTION = TRACKS.organizacao.firestoreState;
 const FIRESTORE_STATE_DOC = 'shared';
 const FIRESTORE_IMAGES_COLLECTION = 'topicImages';
 let firestoreDb = null;
@@ -511,19 +528,62 @@ const updateAuthUI = () => {
   }
 };
 
-const setTab = (tab) => {
-  activeTab = tab;
-  if (tab === 'history') renderHistory();
+const activateTrack = async () => {
+  render();
+  renderHistory();
+  updateAuthUI();
+
+  setSyncStatus('Conectando à nuvem...', 'syncing');
+  const db = await initFirestore();
+  if (!db) {
+    setSyncStatus('Offline: Firestore indisponível', 'error');
+    return;
+  }
+
+  setSyncStatus('Online - sincronizando', 'online');
+  fetchStateFromFirestore();
+  fetchHistoryFromFirestore();
+  subscribeStateFromFirestore();
+  subscribeHistoryFromFirestore();
+};
+
+// Troca entre as trilhas Organização/Atividade: cada uma tem sua própria chave local
+// e coleção no Firestore, então ao trocar reconectamos os listeners para a trilha nova.
+const switchTrack = (track) => {
+  if (track === activeTrackKey || !TRACKS[track]) return;
+
+  // garante que a última alteração da trilha atual já foi enviada antes de trocar
+  persistStateToFirestore().catch(() => {});
+
+  if (unsubscribeState) { unsubscribeState(); unsubscribeState = null; }
+  if (unsubscribeHistory) { unsubscribeHistory(); unsubscribeHistory = null; }
+
+  const cfg = getTrackConfig(track);
+  activeTrackKey = track;
+  storageKey = cfg.storageKey;
+  historyKey = cfg.historyKey;
+  FIRESTORE_COLLECTION = cfg.firestoreSnapshots;
+  FIRESTORE_STATE_COLLECTION = cfg.firestoreState;
+
+  state = normalizeState(load());
+  history = loadHistory();
+  activateTrack();
+};
+
+const setTab = (track, view) => {
+  switchTrack(track);
+  activeTab = view;
+  if (view === 'history') renderHistory();
   $tabButtons.forEach((btn) => {
-    btn.classList.toggle('active', btn.dataset.tab === tab);
+    btn.classList.toggle('active', btn.dataset.track === track && btn.dataset.view === view);
   });
   $tabPanels.forEach((panel) => {
-    panel.classList.toggle('active', panel.dataset.panel === tab);
+    panel.classList.toggle('active', panel.dataset.panel === view);
   });
 };
 
 $tabButtons.forEach((btn) => {
-  btn.addEventListener('click', () => setTab(btn.dataset.tab));
+  btn.addEventListener('click', () => setTab(btn.dataset.track, btn.dataset.view));
 });
 
 if ($loginForm) {
@@ -1241,18 +1301,21 @@ $saveDay.addEventListener('click', async () => {
     return;
   }
 
-  const missingImages = [];
-  state.forEach((subject) => {
-    (subject.topics || []).forEach((topic) => {
-      const hasImg = !!(topic.hasImage || imageCache.has(topic.id));
-      if (topic.done && !hasImg) missingImages.push(`${subject.title} - ${topic.text}`);
+  // Foto obrigatória por tópico concluído só se aplica à trilha Organização
+  if (activeTrackKey === 'organizacao') {
+    const missingImages = [];
+    state.forEach((subject) => {
+      (subject.topics || []).forEach((topic) => {
+        const hasImg = !!(topic.hasImage || imageCache.has(topic.id));
+        if (topic.done && !hasImg) missingImages.push(`${subject.title} - ${topic.text}`);
+      });
     });
-  });
-  if (missingImages.length) {
-    const list = missingImages.slice(0, 5).map((item) => `- ${item}`).join('\n');
-    const tail = missingImages.length > 5 ? '\n...' : '';
-    alert(`Anexe uma imagem para cada tópico marcado antes de salvar.\nFaltando:\n${list}${tail}`);
-    return;
+    if (missingImages.length) {
+      const list = missingImages.slice(0, 5).map((item) => `- ${item}`).join('\n');
+      const tail = missingImages.length > 5 ? '\n...' : '';
+      alert(`Anexe uma imagem para cada tópico marcado antes de salvar.\nFaltando:\n${list}${tail}`);
+      return;
+    }
   }
 
   const undoneTopics = [];
@@ -1325,27 +1388,12 @@ $saveDay.addEventListener('click', async () => {
   persistStateToFirestore().catch((err) => console.warn('Falha ao persistir estado limpo', err));
   imageCache.clear();
   render();
-  setTab('history');
+  setTab(activeTrackKey, 'history');
 });
 
-const startApp = async () => {
-  render();
-  renderHistory();
-  setTab(activeTab);
-  updateAuthUI();
-
-  setSyncStatus('Conectando à nuvem...', 'syncing');
-  const db = await initFirestore();
-  if (!db) {
-    setSyncStatus('Offline: Firestore indisponível', 'error');
-    return;
-  }
-
-  setSyncStatus('Online - sincronizando', 'online');
-  fetchStateFromFirestore();
-  fetchHistoryFromFirestore();
-  subscribeStateFromFirestore();
-  subscribeHistoryFromFirestore();
+const startApp = () => {
+  setTab(activeTrackKey, activeTab);
+  activateTrack();
 };
 
 startApp();
