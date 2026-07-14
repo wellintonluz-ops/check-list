@@ -275,13 +275,22 @@ const loadHistory = () => {
     if (!saved) return [];
     const parsed = JSON.parse(saved);
     if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map((snap) => ({
-        id: snap.id || uid(),
-        savedAt: snap.savedAt || new Date().toISOString(),
-        subjects: normalizeState(snap.subjects),
-      }))
-      .filter(Boolean);
+    const normalized = parsed.map((snap) => ({
+      id: snap.id || uid(),
+      savedAt: snap.savedAt || new Date().toISOString(),
+      subjects: normalizeState(snap.subjects),
+      justification: snap.justification || null,
+      pending: Array.isArray(snap.pending) ? snap.pending : [],
+      images: snap.images && typeof snap.images === 'object' ? snap.images : undefined,
+      track: snap.track || 'organizacao',
+    }));
+    // Remove registros que ficaram salvos aqui por engano em versões antigas (trilha errada);
+    // isso limpa sozinho qualquer contaminação cruzada que tenha ficado no localStorage.
+    const cleaned = normalized.filter((snap) => snap.track === activeTrackKey);
+    if (cleaned.length !== normalized.length) {
+      localStorage.setItem(historyKey, JSON.stringify(cleaned));
+    }
+    return cleaned;
   } catch (err) {
     console.warn('Falha ao carregar histórico', err);
     return [];
@@ -346,7 +355,7 @@ const fetchHistoryFromFirestore = async () => {
 
     const merged = [...remoteHistory];
     history.forEach((item) => {
-      if (!merged.find((r) => r.id === item.id)) merged.push(item);
+      if ((item.track || 'organizacao') === trackKey && !merged.find((r) => r.id === item.id)) merged.push(item);
     });
     history = merged.slice(0, 50);
     saveHistory();
@@ -546,7 +555,7 @@ const subscribeHistoryFromFirestore = async () => {
           .filter((item) => item.track === trackKey);
         const merged = [...remoteHistory];
         history.forEach((item) => {
-          if (!merged.find((r) => r.id === item.id)) merged.push(item);
+          if ((item.track || 'organizacao') === trackKey && !merged.find((r) => r.id === item.id)) merged.push(item);
         });
         history = merged.slice(0, 50);
         saveHistory();
@@ -1388,6 +1397,7 @@ $saveDay.addEventListener('click', async () => {
     subjects: JSON.parse(JSON.stringify(stripImages(state))),
     justification: justification || null,
     pending: undoneTopics,
+    track: activeTrackKey,
   };
   snapshot.images = {};
   for (const subject of state) {
