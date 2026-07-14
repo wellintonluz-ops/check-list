@@ -15,6 +15,7 @@ const TRACKS = {
 const getTrackConfig = (track) => TRACKS[track] || TRACKS.organizacao;
 
 let activeTrackKey = 'organizacao';
+let trackEpoch = 0;
 let storageKey = TRACKS.organizacao.storageKey;
 let historyKey = TRACKS.organizacao.historyKey;
 
@@ -79,7 +80,7 @@ const debounce = (fn, delay = 400) => {
 };
 
 // Placeholder to avoid undefined before debounce is attached
-let persistStateToFirestoreDebounced = () => Promise.resolve();
+let persistStateToFirestoreDebouncedByTrack = {};
 
 const logError = (scope, err, extra) => {
   const details = err && err.message ? err.message : err;
@@ -259,9 +260,11 @@ const load = () => {
 
 const save = () => {
   localStorage.setItem(storageKey, JSON.stringify(state));
-  const persistFn = typeof persistStateToFirestoreDebounced === 'function' ? persistStateToFirestoreDebounced : null;
-  if (persistFn) {
-    Promise.resolve(persistFn()).catch((err) => console.warn('Falha ao salvar estado no Firestore', err));
+  const trackAtSave = activeTrackKey;
+  const stateAtSave = state;
+  const persistFn = persistStateToFirestoreDebouncedByTrack[trackAtSave];
+  if (typeof persistFn === 'function') {
+    Promise.resolve(persistFn(trackAtSave, stateAtSave)).catch((err) => console.warn('Falha ao salvar estado no Firestore', err));
   }
 };
 const saveHistory = () => localStorage.setItem(historyKey, JSON.stringify(history));
@@ -318,10 +321,13 @@ const initFirestore = async () => {
 };
 
 const fetchHistoryFromFirestore = async () => {
+  const epochAtStart = trackEpoch;
+  const cfg = getTrackConfig(activeTrackKey);
   try {
     const db = await initFirestore();
-    if (!db) return;
-    const snap = await db.collection(FIRESTORE_COLLECTION).orderBy('savedAt', 'desc').limit(50).get();
+    if (!db || trackEpoch !== epochAtStart) return;
+    const snap = await db.collection(cfg.firestoreSnapshots).orderBy('savedAt', 'desc').limit(50).get();
+    if (trackEpoch !== epochAtStart) return; // trilha mudou enquanto buscávamos; descarta resultado desatualizado
     const remoteHistory = snap.docs.map((doc) => {
       const data = doc.data() || {};
       return {
@@ -349,6 +355,7 @@ const fetchHistoryFromFirestore = async () => {
 };
 
 const persistSnapshotToFirestore = async (snapshot) => {
+  const cfg = getTrackConfig(activeTrackKey);
   try {
     const db = await initFirestore();
     if (!db) return;
@@ -359,35 +366,48 @@ const persistSnapshotToFirestore = async (snapshot) => {
       subjects: stripImages(snapshot.subjects),
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
     };
-    await db.collection(FIRESTORE_COLLECTION).doc(snapshot.id).set(payload);
+    await db.collection(cfg.firestoreSnapshots).doc(snapshot.id).set(payload);
   } catch (err) {
     logError('persistSnapshotToFirestore', err, { snapshotId: snapshot.id });
   }
 };
 
-const persistStateToFirestore = async () => {
+const persistStateToFirestore = async (track, stateSnapshot) => {
+  const trackKey = track || activeTrackKey;
+  const dataSnapshot = stateSnapshot || state;
+  const cfg = getTrackConfig(trackKey);
   try {
     const db = await initFirestore();
     if (!db) return;
     const payload = {
-      subjects: stripImages(state),
+      subjects: stripImages(dataSnapshot),
       updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
     };
-    await db.collection(FIRESTORE_STATE_COLLECTION).doc(FIRESTORE_STATE_DOC).set(payload, { merge: true });
-    setSyncStatus('Estado salvo na nuvem', 'online');
+    await db.collection(cfg.firestoreState).doc(FIRESTORE_STATE_DOC).set(payload, { merge: true });
+    if (trackKey === activeTrackKey) setSyncStatus('Estado salvo na nuvem', 'online');
   } catch (err) {
     console.warn('Falha ao salvar estado no Firestore', err);
-    setSyncStatus('Erro ao salvar na nuvem', 'error');
+    if (trackKey === activeTrackKey) setSyncStatus('Erro ao salvar na nuvem', 'error');
   }
 };
 
-persistStateToFirestoreDebounced = debounce(persistStateToFirestore, 350);
+// Um debounce independente por trilha: editar Atividade não deve cancelar
+// o envio pendente de uma edição recente em Organização (e vice-versa).
+Object.keys(TRACKS).forEach((trackKey) => {
+  persistStateToFirestoreDebouncedByTrack[trackKey] = debounce(
+    (track, stateSnapshot) => persistStateToFirestore(track, stateSnapshot),
+    350
+  );
+});
 
 const fetchStateFromFirestore = async () => {
+  const epochAtStart = trackEpoch;
+  const cfg = getTrackConfig(activeTrackKey);
   try {
     const db = await initFirestore();
-    if (!db) return;
-    const doc = await db.collection(FIRESTORE_STATE_COLLECTION).doc(FIRESTORE_STATE_DOC).get();
+    if (!db || trackEpoch !== epochAtStart) return;
+    const doc = await db.collection(cfg.firestoreState).doc(FIRESTORE_STATE_DOC).get();
+    if (trackEpoch !== epochAtStart) return; // trilha mudou enquanto buscávamos; descarta resultado desatualizado
     if (!doc.exists) return;
     const data = doc.data() || {};
     const remoteSubjects = normalizeState(data.subjects || []);
@@ -403,14 +423,24 @@ const fetchStateFromFirestore = async () => {
 };
 
 const subscribeStateFromFirestore = async () => {
+  const epochAtStart = trackEpoch;
+  const cfg = getTrackConfig(activeTrackKey);
   try {
     const db = await initFirestore();
-    if (!db) return;
+    if (!db || trackEpoch !== epochAtStart) return;
     if (unsubscribeState) return; // já inscrito
+    let isFirstSnapshot = true;
     unsubscribeState = db
-      .collection(FIRESTORE_STATE_COLLECTION)
+      .collection(cfg.firestoreState)
       .doc(FIRESTORE_STATE_DOC)
       .onSnapshot((doc) => {
+        if (trackEpoch !== epochAtStart) return; // evento de uma trilha que não está mais ativa
+        if (isFirstSnapshot) {
+          // a 1ª emissão só repete o que fetchStateFromFirestore acabou de buscar;
+          // ignorá-la evita sobrescrever uma edição local recente com dado desatualizado
+          isFirstSnapshot = false;
+          return;
+        }
         if (!doc.exists) return;
         // Ignora alterações locais ainda não confirmadas
         if (doc.metadata && doc.metadata.hasPendingWrites) return;
@@ -433,6 +463,7 @@ const subscribeStateFromFirestore = async () => {
 };
 
 const deleteHistoryEntry = async (snapshotId) => {
+  const cfg = getTrackConfig(activeTrackKey);
   const index = history.findIndex((item) => item.id === snapshotId);
   if (index === -1) return;
   history.splice(index, 1);
@@ -442,7 +473,7 @@ const deleteHistoryEntry = async (snapshotId) => {
   try {
     const db = await initFirestore();
     if (!db) return;
-    await db.collection(FIRESTORE_COLLECTION).doc(snapshotId).delete();
+    await db.collection(cfg.firestoreSnapshots).doc(snapshotId).delete();
     setSyncStatus('Histórico removido na nuvem', 'online');
   } catch (err) {
     console.warn('Falha ao remover do Firestore', err);
@@ -479,15 +510,23 @@ window.addEventListener('keydown', (event) => {
 });
 
 const subscribeHistoryFromFirestore = async () => {
+  const epochAtStart = trackEpoch;
+  const cfg = getTrackConfig(activeTrackKey);
   try {
     const db = await initFirestore();
-    if (!db) return;
+    if (!db || trackEpoch !== epochAtStart) return;
     if (unsubscribeHistory) return;
+    let isFirstSnapshot = true;
     unsubscribeHistory = db
-      .collection(FIRESTORE_COLLECTION)
+      .collection(cfg.firestoreSnapshots)
       .orderBy('savedAt', 'desc')
       .limit(50)
       .onSnapshot((snap) => {
+        if (trackEpoch !== epochAtStart) return; // evento de uma trilha que não está mais ativa
+        if (isFirstSnapshot) {
+          isFirstSnapshot = false;
+          return;
+        }
         const remoteHistory = snap.docs.map((doc) => {
           const data = doc.data() || {};
           return {
@@ -552,12 +591,10 @@ const activateTrack = async () => {
 const switchTrack = (track) => {
   if (track === activeTrackKey || !TRACKS[track]) return;
 
-  // garante que a última alteração da trilha atual já foi enviada antes de trocar
-  persistStateToFirestore().catch(() => {});
-
   if (unsubscribeState) { unsubscribeState(); unsubscribeState = null; }
   if (unsubscribeHistory) { unsubscribeHistory(); unsubscribeHistory = null; }
 
+  trackEpoch += 1;
   const cfg = getTrackConfig(track);
   activeTrackKey = track;
   storageKey = cfg.storageKey;
@@ -635,11 +672,12 @@ document.addEventListener('click', (event) => {
 });
 
 const persistSnapshotSubjectsToFirestore = async (snapshotId, subjects) => {
+  const cfg = getTrackConfig(activeTrackKey);
   try {
     const db = await initFirestore();
     if (!db) return;
     await db
-      .collection(FIRESTORE_COLLECTION)
+      .collection(cfg.firestoreSnapshots)
       .doc(snapshotId)
       .set({ subjects: stripImages(subjects) }, { merge: true });
     setSyncStatus('Validação salva na nuvem', 'online');
